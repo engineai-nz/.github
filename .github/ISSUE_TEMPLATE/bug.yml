@@ -1,0 +1,90 @@
+name: Bug report
+description: Something broken in the app or system.
+title: "[Bug] "
+labels:
+  - type/bug
+  - priority/normal
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Report a bug that needs fixing. Include enough detail that someone can reproduce it.
+
+  - type: input
+    id: linear-id
+    attributes:
+      label: Linear issue
+      placeholder: ENG-123
+    validations:
+      required: false
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: What's broken
+      description: One or two sentences.
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: Numbered steps, starting from a clean state.
+      placeholder: |
+        1. Go to ...
+        2. Click ...
+        3. Expected ... Actual ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behaviour
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behaviour
+    validations:
+      required: true
+
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence
+      description: Screenshots, Loom, console errors, logs, stack traces.
+    validations:
+      required: false
+
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      placeholder: Production / Staging / Local, browser, device
+    validations:
+      required: false
+
+  - type: dropdown
+    id: severity
+    attributes:
+      label: Severity
+      options:
+        - S1 - Production down or data loss
+        - S2 - Major feature broken, workaround exists
+        - S3 - Minor feature broken
+        - S4 - Cosmetic or very low impact
+      default: 2
+    validations:
+      required: true
+
+  - type: textarea
+    id: impact
+    attributes:
+      label: Who's affected
+      description: Which users, clients, or systems?
+    validations:
+      required: false

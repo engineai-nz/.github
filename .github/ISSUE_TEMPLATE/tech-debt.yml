@@ -1,0 +1,64 @@
+name: Tech debt / refactor
+description: Cleanup, refactor, developer ergonomics, or debt paydown.
+title: "[Tech debt] "
+labels:
+  - type/tech-debt
+  - priority/normal
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this for refactors, cleanups, and developer ergonomics work.
+        If you can't explain the cost of NOT doing this, don't raise it yet.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Current pain
+      description: What's annoying, risky, slow, or fragile about the current code?
+    validations:
+      required: true
+
+  - type: textarea
+    id: cost-of-waiting
+    attributes:
+      label: Cost of waiting
+      description: What does this cost us each week it stays? Speed, risk, confusion, onboarding pain.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposed
+    attributes:
+      label: Proposed change
+      description: What would the code look like after?
+    validations:
+      required: true
+
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope
+      description: Files, modules, or systems affected.
+    validations:
+      required: true
+
+  - type: textarea
+    id: risks
+    attributes:
+      label: Risks
+      description: What could regress? Are there migrations involved? Test coverage gaps?
+    validations:
+      required: false
+
+  - type: dropdown
+    id: risk-level
+    attributes:
+      label: Risk level
+      options:
+        - Low (isolated, easy to revert)
+        - Medium (touches shared modules or patterns)
+        - High (auth, billing, data model, infra)
+      default: 0
+    validations:
+      required: true

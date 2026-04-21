@@ -1,0 +1,87 @@
+name: Incident / postmortem
+description: Production incident. Log first, fix next, postmortem once stable.
+title: "[Incident] "
+labels:
+  - type/incident
+  - priority/urgent
+  - risk/high
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Raise this the moment a production incident starts. Fill in what you can now.
+        Complete the postmortem section within 48 hours of resolution.
+
+  - type: input
+    id: started
+    attributes:
+      label: When did it start
+      placeholder: 2026-04-21 14:32 NZST
+    validations:
+      required: true
+
+  - type: input
+    id: detected
+    attributes:
+      label: How was it detected
+      placeholder: Customer report / Sentry / monitoring / self-noticed
+    validations:
+      required: true
+
+  - type: textarea
+    id: impact
+    attributes:
+      label: Impact
+      description: Who was affected? For how long? What functionality was degraded?
+    validations:
+      required: true
+
+  - type: textarea
+    id: timeline
+    attributes:
+      label: Timeline
+      description: Bullet-pointed times and events. Update in real time.
+      placeholder: |
+        - 14:32 NZST - first error in Sentry
+        - 14:41 NZST - Ben ack, started investigating
+        - 14:58 NZST - root cause identified as ...
+        - 15:05 NZST - fix deployed
+        - 15:10 NZST - confirmed healthy
+    validations:
+      required: true
+
+  - type: textarea
+    id: root-cause
+    attributes:
+      label: Root cause
+      description: What actually caused it? Be specific. Fill in after stabilising.
+    validations:
+      required: false
+
+  - type: textarea
+    id: resolution
+    attributes:
+      label: Resolution
+      description: What was done to stop the bleeding? What was done to fix the root cause?
+    validations:
+      required: false
+
+  - type: textarea
+    id: contributing-factors
+    attributes:
+      label: Contributing factors
+      description: What gaps made this possible? Missing tests, missing monitoring, unclear docs, risky change merged without checklist.
+    validations:
+      required: false
+
+  - type: textarea
+    id: action-items
+    attributes:
+      label: Action items
+      description: Specific, owned, with a Linear issue each.
+      placeholder: |
+        - [ ] Add monitoring alert for X (owner: @joe, ENG-...)
+        - [ ] Backfill tests for Y (owner: @ben, ENG-...)
+        - [ ] Update runbook Z (owner: @ben, ENG-...)
+    validations:
+      required: false

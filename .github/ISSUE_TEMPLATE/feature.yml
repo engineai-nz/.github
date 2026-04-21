@@ -1,0 +1,107 @@
+name: Feature / build slice
+description: A new capability or a single shippable slice of a larger feature.
+title: "[Feature] "
+labels:
+  - type/feature
+  - priority/normal
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this for a new capability or a shippable slice of a larger feature.
+        Rule: if this can't be reviewed in a single PR, split it.
+
+  - type: input
+    id: linear-id
+    attributes:
+      label: Linear issue
+      description: The Linear issue ID this tracks. Leave blank if Linear hasn't been created yet.
+      placeholder: ENG-123
+    validations:
+      required: false
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: Who has the problem and what is happening?
+      placeholder: |
+        Describe the user or system problem. Avoid solutions here.
+    validations:
+      required: true
+
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Desired outcome
+      description: What should be true when this ships?
+    validations:
+      required: true
+
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope
+      description: What's in this slice?
+      placeholder: |
+        - Thing 1
+        - Thing 2
+    validations:
+      required: true
+
+  - type: textarea
+    id: non-scope
+    attributes:
+      label: Out of scope
+      description: What is explicitly not included?
+    validations:
+      required: false
+
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: Observable conditions that define done. Use checkboxes.
+      placeholder: |
+        - [ ] User can X
+        - [ ] System does Y
+        - [ ] Screen shows Z
+    validations:
+      required: true
+
+  - type: textarea
+    id: validation
+    attributes:
+      label: Validation plan
+      description: How will we know it works in the real environment?
+    validations:
+      required: true
+
+  - type: textarea
+    id: risks
+    attributes:
+      label: Risks and notes
+      description: What could break, confuse, or surprise us?
+    validations:
+      required: false
+
+  - type: input
+    id: notion-link
+    attributes:
+      label: Notion spec
+      description: Link to the Notion spec if one exists.
+      placeholder: https://www.notion.so/...
+    validations:
+      required: false
+
+  - type: dropdown
+    id: risk-level
+    attributes:
+      label: Risk level
+      options:
+        - Low (UI-only, additive, isolated)
+        - Medium (business logic, integrations, schema-adjacent)
+        - High (auth, billing, migrations, data deletion, infra, secrets)
+      default: 0
+    validations:
+      required: true
