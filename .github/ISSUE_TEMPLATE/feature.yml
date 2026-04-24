@@ -11,15 +11,6 @@ body:
         Use this for a new capability or a shippable slice of a larger feature.
         Rule: if this can't be reviewed in a single PR, split it.
 
-  - type: input
-    id: linear-id
-    attributes:
-      label: Linear issue
-      description: The Linear issue ID this tracks. Leave blank if Linear hasn't been created yet.
-      placeholder: ENG-123
-    validations:
-      required: false
-
   - type: textarea
     id: problem
     attributes:

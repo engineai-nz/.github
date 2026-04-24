@@ -11,9 +11,9 @@ For tiny changes (typos, copy tweaks, lint-only, doc-only, dep bumps), delete th
 ## Why
 <!-- What problem this solves. Link the Notion spec if one exists. -->
 
-## Linked Linear issue
-<!-- Use Linear magic words so this PR auto-closes the issue on merge. -->
-Closes ENG-
+## Linked issue
+<!-- Use GitHub closing keywords so this PR auto-closes the issue on merge. -->
+Closes #
 
 ## Validation
 - [ ] Acceptance criteria met (listed below or linked)
@@ -23,7 +23,7 @@ Closes ENG-
 - [ ] Rollback plan considered
 
 ### Acceptance criteria
-<!-- Copy from the Linear issue. Tick as validated. -->
+<!-- Copy from the GitHub issue. Tick as validated. -->
 - [ ]
 - [ ]
 - [ ]

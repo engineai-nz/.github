@@ -78,10 +78,10 @@ body:
     id: action-items
     attributes:
       label: Action items
-      description: Specific, owned, with a Linear issue each.
+      description: Specific, owned, each tracked as its own follow-up GitHub issue.
       placeholder: |
-        - [ ] Add monitoring alert for X (owner: @joe, ENG-...)
-        - [ ] Backfill tests for Y (owner: @ben, ENG-...)
-        - [ ] Update runbook Z (owner: @ben, ENG-...)
+        - [ ] Add monitoring alert for X (owner: @Tradie-AI-2000, #...)
+        - [ ] Backfill tests for Y (owner: @benduchateau, #...)
+        - [ ] Update runbook Z (owner: @benduchateau, #...)
     validations:
       required: false

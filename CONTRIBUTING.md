@@ -5,15 +5,15 @@ Engine AI is a two-founder shop. Most repos are internal, some are client work. 
 ## Before you start
 
 1. Read the `HOW_WE_BUILD.md` in the specific repo. It has the rules calibrated to that project.
-2. Read `PROJECT_CONTEXT.md` and `ARCHITECTURE.md` in that repo so you understand what you're changing.
-3. Check `DECISIONS.md` — if a decision has already been made about something, don't relitigate it. Propose a supersede entry if you disagree.
+2. Read `docs/brief.md` and `docs/master-spec.md` in that repo so you understand what you're changing.
+3. Check `docs/DECISIONS.md` — if a decision has already been made about something, don't relitigate it. Propose a supersede entry if you disagree.
 
 ## The golden path
 
 1. Clarify the problem before writing code.
-2. Create a Linear issue. Link the Notion spec if there is one.
-3. Branch per issue: `eng-<id>-<slug>`.
-4. Open a draft PR early.
+2. Create a GitHub issue using the appropriate template. Link the Notion page if there is one.
+3. Branch per issue: `eng-<issue-number>-<slug>`.
+4. Open a draft PR early. Include `Closes #<issue-number>` in the PR body.
 5. Validate against acceptance criteria.
 6. At least one founder approves.
 7. Squash-merge.
@@ -21,7 +21,7 @@ Engine AI is a two-founder shop. Most repos are internal, some are client work. 
 ## Pull requests
 
 - Use the PR template in the repo (or the org-level default).
-- Title format: `[ENG-123] Short action-focused description`.
+- Title format: `[#123] Short action-focused description`.
 - Every PR gets a `risk/` label and an `ai/` label.
 - Checks must pass.
 
