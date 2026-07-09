@@ -1,0 +1,159 @@
+name: Node CI
+
+# Reusable CI for every Engine AI Node/TypeScript repo.
+# Call it from a repo with:
+#
+#   jobs:
+#     ci:
+#       uses: engineai-nz/.github/.github/workflows/node-ci.yml@main
+#       with:
+#         required-scripts: lint,typecheck,test,build
+#
+# One fix here reaches every repo. See scripts/new-project.sh for bootstrap.
+
+on:
+  workflow_call:
+    inputs:
+      node-version:
+        description: >-
+          Node version. Leave empty to resolve from .nvmrc, then package.json
+          "engines.node", then the default below. Hardcoding a version here is
+          how a repo ends up green locally and red in CI.
+        required: false
+        type: string
+        default: ""
+      default-node-version:
+        description: Fallback when neither .nvmrc nor engines.node is present.
+        required: false
+        type: string
+        default: "22"
+      required-scripts:
+        description: >-
+          Comma-separated npm scripts that MUST exist and MUST pass. A missing
+          script is a hard failure, not a silent skip — `npm run x --if-present`
+          exits 0 when x is undefined, which makes a green tick meaningless.
+        required: false
+        type: string
+        default: "lint,typecheck,test,build"
+      working-directory:
+        description: Directory containing package.json.
+        required: false
+        type: string
+        default: "."
+      timeout-minutes:
+        required: false
+        type: number
+        default: 15
+
+jobs:
+  check:
+    name: Install, lint, test, typecheck
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Repos that carry no package.json (docs, skills, brains) skip the Node
+      # pipeline rather than failing `npm ci` forever.
+      - name: Detect project shape
+        id: detect
+        run: |
+          if [ ! -f package.json ]; then
+            echo "node=false" >> "$GITHUB_OUTPUT"
+            echo "No \`package.json\` — Node checks skipped." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          echo "node=true" >> "$GITHUB_OUTPUT"
+
+          if [ -f package-lock.json ]; then
+            echo "lock=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "lock=false" >> "$GITHUB_OUTPUT"
+          fi
+
+          # Precedence: explicit input > .nvmrc > engines.node > default.
+          version="${{ inputs.node-version }}"
+          source="workflow input"
+          if [ -z "$version" ] && [ -f .nvmrc ]; then
+            version="$(tr -d 'v \t\r\n' < .nvmrc)"
+            source=".nvmrc"
+          fi
+          if [ -z "$version" ]; then
+            engines="$(node -p "try{require('./package.json').engines?.node||''}catch(e){''}" 2>/dev/null || echo "")"
+            if [ -n "$engines" ]; then
+              # ">=20", "^22.1.0", "20.x" -> major only
+              version="$(printf '%s' "$engines" | grep -oE '[0-9]+' | head -1)"
+              source="package.json engines.node ($engines)"
+            fi
+          fi
+          if [ -z "$version" ]; then
+            version="${{ inputs.default-node-version }}"
+            source="workflow default"
+          fi
+          echo "node-version=$version" >> "$GITHUB_OUTPUT"
+          echo "Node **$version** (from $source)" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Setup Node.js
+        if: steps.detect.outputs.node == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ steps.detect.outputs.node-version }}
+          # `cache: npm` hashes the lockfile and errors when there isn't one.
+          cache: ${{ steps.detect.outputs.lock == 'true' && 'npm' || '' }}
+
+      - name: Install dependencies
+        if: steps.detect.outputs.node == 'true'
+        run: |
+          if [ "${{ steps.detect.outputs.lock }}" = "true" ]; then
+            npm ci
+          else
+            echo "::warning::No package-lock.json — falling back to 'npm install'. Commit a lockfile for reproducible CI."
+            npm install
+          fi
+
+      # Every required script must EXIST before anything runs, so a repo can't
+      # pass by simply not defining its tests.
+      - name: Verify required scripts are defined
+        if: steps.detect.outputs.node == 'true'
+        run: |
+          missing=""
+          IFS=',' read -ra scripts <<< "${{ inputs.required-scripts }}"
+          for s in "${scripts[@]}"; do
+            s="$(printf '%s' "$s" | xargs)"
+            [ -z "$s" ] && continue
+            if ! node -e "const p=require('./package.json');process.exit(p.scripts&&p.scripts[process.argv[1]]?0:1)" "$s"; then
+              missing="$missing $s"
+            fi
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::package.json is missing required script(s):$missing — either define them or narrow 'required-scripts' in this repo's ci.yml."
+            exit 1
+          fi
+          echo "All required scripts defined: ${{ inputs.required-scripts }}"
+
+      - name: Run required scripts
+        if: steps.detect.outputs.node == 'true'
+        run: |
+          IFS=',' read -ra scripts <<< "${{ inputs.required-scripts }}"
+          {
+            echo "### Checks"
+            echo ""
+          } >> "$GITHUB_STEP_SUMMARY"
+          for s in "${scripts[@]}"; do
+            s="$(printf '%s' "$s" | xargs)"
+            [ -z "$s" ] && continue
+            echo "::group::npm run $s"
+            if npm run "$s"; then
+              echo "- \`$s\` — passed" >> "$GITHUB_STEP_SUMMARY"
+            else
+              echo "- \`$s\` — **FAILED**" >> "$GITHUB_STEP_SUMMARY"
+              echo "::endgroup::"
+              exit 1
+            fi
+            echo "::endgroup::"
+          done
