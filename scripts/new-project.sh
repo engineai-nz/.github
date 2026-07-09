@@ -15,7 +15,11 @@ set -euo pipefail
 
 ORG="engineai-nz"
 TEMPLATE="$ORG/engine-ai-starter"
-CI_CONTEXT="Install, lint, test, typecheck"   # must match the job name in node-ci.yml
+
+# A reusable workflow reports its check as "<caller-job-id> / <job-name>", NOT the
+# bare job name. Requiring the bare name leaves every PR BLOCKED forever on a green
+# build. The caller's job id must therefore be `ci`, matching the template's ci.yml.
+CI_CONTEXT="ci / Install, lint, test, typecheck"
 
 SLUG=""; CLIENT=""; CREATE=false; WANT_CI=true; DRY=false
 
@@ -138,6 +142,26 @@ for l in "${labels[@]}"; do
   fi
 done
 echo "  ${#labels[@]} labels applied"
+
+# ---------------------------------------------------------------- verify
+# A required context that never reports blocks every PR permanently. Check that
+# the name we just required has actually been emitted by a recent run.
+if $WANT_CI && ! $DRY; then
+  say "verifying required check '$CI_CONTEXT' is a real context"
+  seen=$(gh api "repos/$REPO/commits/$(gh api "repos/$REPO" -q .default_branch)/check-runs" \
+           -q '.check_runs[].name' 2>/dev/null || true)
+  if [[ -z "$seen" ]]; then
+    echo "  ⚠ no check runs on the default branch yet — cannot verify."
+    echo "    Open a PR and confirm it reaches CLEAN before trusting this ruleset."
+  elif grep -Fxq "$CI_CONTEXT" <<< "$seen"; then
+    echo "  ✓ '$CI_CONTEXT' reported by a real run"
+  else
+    echo "  ✗ MISMATCH — required '$CI_CONTEXT' but the repo emits:"
+    sed 's/^/      /' <<< "$seen"
+    echo "    Every PR will sit BLOCKED. Fix CI_CONTEXT or the caller job id, then re-run."
+    exit 1
+  fi
+fi
 
 # ---------------------------------------------------------------- report
 say "done — $REPO"
