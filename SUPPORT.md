@@ -19,3 +19,5 @@ Open an issue. Tag a founder. We'll respond when we can.
 ## Not a support channel
 
 GitHub issues in public Engine AI repos are not customer support. If you're a user of a client product built by Engine AI, contact that client directly.
+
+<!-- auto-merge behaviour probe -->
