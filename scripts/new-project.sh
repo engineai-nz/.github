@@ -9,9 +9,11 @@
 # mechanism that actually configures a repo — a checklist in a markdown file has
 # never once been followed to completion.
 #
-# The org ruleset "Org baseline: protect default branch" already blocks deletion
-# and force-push on every repo's default branch. This script layers the per-repo
-# rules on top: PR-required, linear history, and (with CI) a required check.
+# Two org rulesets do the heavy lifting: "Org baseline: protect default branch"
+# blocks deletion/force-push everywhere, and "CI required (standard starter
+# context)" supplies the required check to every repo with custom property
+# ci=true. This script layers the rest on top — PR-required, linear history,
+# labels — and sets ci=true, which is what opts the repo into the check.
 #
 # Idempotent: safe to re-run against an existing repo to repair drift.
 
@@ -76,11 +78,12 @@ run gh api -X PATCH "repos/$REPO" \
   -F allow_rebase_merge=true >/dev/null
 
 # ---------------------------------------------------------------- properties
-# Intended for a future org ruleset that targets props.ci=true. As of 2026-07-10
-# `orgs/engineai-nz/properties/schema` is empty, so this is a no-op — the values
-# have nowhere to land. Kept because the write is harmless and becomes live the
-# moment the schema is defined. Repos without CI must NOT be swept into such a
-# ruleset: a required check that never reports leaves every PR BLOCKED forever.
+# ci=true is what opts this repo into the org ruleset "CI required (standard
+# starter context)" — since 2026-07-10 the org rule is the ONLY source of the
+# required check; this script no longer writes a per-repo copy. That makes this
+# write LOAD-BEARING under CI: if it fails, the repo has auto-merge on and no
+# required check (the blind-merge footgun), so we flip auto-merge back off and
+# abort rather than leave that state behind.
 say "custom properties: ci=$WANT_CI client=${CLIENT:-none}"
 props="[{\"property_name\":\"ci\",\"value\":\"$($WANT_CI && echo true || echo false)\"}]"
 if [[ -n "$CLIENT" ]]; then
@@ -90,14 +93,23 @@ if $DRY; then
   echo "DRY: set custom properties -> $props"
 elif echo "{\"properties\":$props}" | gh api -X PATCH "repos/$REPO/properties/values" --input - >/dev/null 2>&1; then
   echo "  ✓ properties set"
+elif $WANT_CI; then
+  echo "  ✗ FAILED to set ci=true — the org ruleset will NOT cover this repo." >&2
+  echo "    Disabling auto-merge so the repo fails closed instead of merging blind." >&2
+  gh api -X PATCH "repos/$REPO" -F allow_auto_merge=false >/dev/null
+  echo "    Check the 'ci' schema exists at github.com/organizations/$ORG/settings/custom-properties" >&2
+  echo "    and that your token can write repo properties, then re-run." >&2
+  exit 1
 else
-  echo "  ⚠ properties NOT set — no org-level schema defines 'ci'/'client'."
-  echo "    Harmless today (nothing targets them). Define the schema at"
-  echo "    github.com/organizations/$ORG/settings/custom-properties, then re-run."
+  echo "  ⚠ 'client' property not set (non-fatal; ci=false needs no org coverage)."
 fi
 
 # ---------------------------------------------------------------- ruleset
 # No approving reviews: Ben and Joe do not gate each other. CI is the gate.
+# No required_status_checks here: the org ruleset "CI required (standard starter
+# context)" supplies it for every repo with ci=true. Writing a second copy per
+# repo is the drift that took a day to clean up on 2026-07-10. Re-adding it here
+# would be redundant on covered repos and would mask the property write failing.
 say "ruleset 'Protect main'"
 RULES='[
   {"type":"deletion"},
@@ -109,14 +121,7 @@ RULES='[
     "require_code_owner_review":false,
     "require_last_push_approval":false,
     "required_review_thread_resolution":false,
-    "allowed_merge_methods":["squash","rebase"]}}'
-if $WANT_CI; then
-  RULES="$RULES,
-  {\"type\":\"required_status_checks\",\"parameters\":{
-    \"strict_required_status_checks_policy\":false,
-    \"required_status_checks\":[{\"context\":\"$CI_CONTEXT\"}]}}"
-fi
-RULES="$RULES]"
+    "allowed_merge_methods":["squash","rebase"]}}]'
 
 BODY=$(cat <<JSON
 {"name":"Protect main","target":"branch","enforcement":"active",
@@ -158,21 +163,39 @@ done
 echo "  ${#labels[@]} labels applied"
 
 # ---------------------------------------------------------------- verify
-# A required context that never reports blocks every PR permanently. Check that
-# the name we just required has actually been emitted by a recent run.
 if $WANT_CI && ! $DRY; then
+  DB=$(gh api "repos/$REPO" -q .default_branch)
+
+  # 1. The org ruleset must actually reach this branch. ci=true is set above,
+  #    but property-targeted rulesets are the only source of the check now —
+  #    if it hasn't landed, auto-merge is live with nothing holding it.
+  say "verifying the org rule covers $DB"
+  org_ck=$(gh api "repos/$REPO/rules/branches/$DB" \
+             -q '[.[]|select(.type=="required_status_checks" and .ruleset_source_type=="Organization")]|length' 2>/dev/null || echo 0)
+  if [[ "${org_ck:-0}" -ge 1 ]]; then
+    echo "  ✓ org-sourced required check active on $DB"
+  else
+    echo "  ✗ org ruleset has NOT picked this repo up — auto-merge would be blind." >&2
+    echo "    Disabling auto-merge to fail closed. Confirm ci=true stuck" >&2
+    echo "    (gh api repos/$REPO/properties/values) and re-run." >&2
+    gh api -X PATCH "repos/$REPO" -F allow_auto_merge=false >/dev/null
+    exit 1
+  fi
+
+  # 2. A required context that never reports blocks every PR permanently. Check
+  #    that the org-required name is one this repo's CI actually emits.
   say "verifying required check '$CI_CONTEXT' is a real context"
-  seen=$(gh api "repos/$REPO/commits/$(gh api "repos/$REPO" -q .default_branch)/check-runs" \
-           -q '.check_runs[].name' 2>/dev/null || true)
+  seen=$(gh api "repos/$REPO/commits/$DB/check-runs" -q '.check_runs[].name' 2>/dev/null || true)
   if [[ -z "$seen" ]]; then
     echo "  ⚠ no check runs on the default branch yet — cannot verify."
-    echo "    Open a PR and confirm it reaches CLEAN before trusting this ruleset."
+    echo "    Open a PR and confirm it reaches CLEAN before trusting this setup."
   elif grep -Fxq "$CI_CONTEXT" <<< "$seen"; then
     echo "  ✓ '$CI_CONTEXT' reported by a real run"
   else
-    echo "  ✗ MISMATCH — required '$CI_CONTEXT' but the repo emits:"
+    echo "  ✗ MISMATCH — org rule requires '$CI_CONTEXT' but the repo emits:"
     sed 's/^/      /' <<< "$seen"
-    echo "    Every PR will sit BLOCKED. Fix CI_CONTEXT or the caller job id, then re-run."
+    echo "    Every PR will sit BLOCKED. Fix the caller job id in ci.yml (must be 'ci'),"
+    echo "    or set ci=false until it is, then re-run."
     exit 1
   fi
 fi
