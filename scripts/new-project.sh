@@ -9,6 +9,10 @@
 # mechanism that actually configures a repo — a checklist in a markdown file has
 # never once been followed to completion.
 #
+# The org ruleset "Org baseline: protect default branch" already blocks deletion
+# and force-push on every repo's default branch. This script layers the per-repo
+# rules on top: PR-required, linear history, and (with CI) a required check.
+#
 # Idempotent: safe to re-run against an existing repo to repair drift.
 
 set -euo pipefail
@@ -59,17 +63,24 @@ else
 fi
 
 # ---------------------------------------------------------------- settings
-say "repo settings: auto-merge on, delete branch on merge, squash+rebase only"
+# Auto-merge is only safe when something holds it. With no required check,
+# `gh pr merge --auto` merges instantly — approvals are 0 by design, so the
+# pull_request rule alone gates nothing. Under --no-ci we therefore fail closed:
+# allow_auto_merge=false makes `--auto` error rather than silently ship.
+say "repo settings: auto-merge=$WANT_CI, delete branch on merge, squash+rebase only"
 run gh api -X PATCH "repos/$REPO" \
-  -F allow_auto_merge=true \
+  -F allow_auto_merge=$($WANT_CI && echo true || echo false) \
   -F delete_branch_on_merge=true \
   -F allow_merge_commit=false \
   -F allow_squash_merge=true \
   -F allow_rebase_merge=true >/dev/null
 
 # ---------------------------------------------------------------- properties
-# Org rulesets target by custom property. Repos without CI must NOT be swept in:
-# a required check that never reports leaves every PR BLOCKED forever.
+# Intended for a future org ruleset that targets props.ci=true. As of 2026-07-10
+# `orgs/engineai-nz/properties/schema` is empty, so this is a no-op — the values
+# have nowhere to land. Kept because the write is harmless and becomes live the
+# moment the schema is defined. Repos without CI must NOT be swept into such a
+# ruleset: a required check that never reports leaves every PR BLOCKED forever.
 say "custom properties: ci=$WANT_CI client=${CLIENT:-none}"
 props="[{\"property_name\":\"ci\",\"value\":\"$($WANT_CI && echo true || echo false)\"}]"
 if [[ -n "$CLIENT" ]]; then
@@ -77,9 +88,12 @@ if [[ -n "$CLIENT" ]]; then
 fi
 if $DRY; then
   echo "DRY: set custom properties -> $props"
+elif echo "{\"properties\":$props}" | gh api -X PATCH "repos/$REPO/properties/values" --input - >/dev/null 2>&1; then
+  echo "  ✓ properties set"
 else
-  echo "{\"properties\":$props}" | gh api -X PATCH "repos/$REPO/properties/values" --input - >/dev/null 2>&1 \
-    || echo "  (custom properties not defined at org level yet — skipping, non-fatal)"
+  echo "  ⚠ properties NOT set — no org-level schema defines 'ci'/'client'."
+  echo "    Harmless today (nothing targets them). Define the schema at"
+  echo "    github.com/organizations/$ORG/settings/custom-properties, then re-run."
 fi
 
 # ---------------------------------------------------------------- ruleset
@@ -176,8 +190,14 @@ cat <<EOF
     - Slack channel #client-${CLIENT:-<name>}  — create it, then pin repo + Notion links
     - Notion project page
     - Seed issues from docs/prd.md
-
-  If this repo has no CI yet, it was bootstrapped with ci=false and is NOT
-  covered by the org ruleset's required check. Add a caller ci.yml, then re-run
-  this script without --no-ci.
 EOF
+
+if ! $WANT_CI; then
+  cat <<EOF
+
+  Bootstrapped with --no-ci: auto-merge is OFF, so \`gh pr merge --auto\` errors
+  instead of merging an unchecked PR. Add a caller ci.yml emitting
+  "$CI_CONTEXT", then re-run this script without --no-ci to
+  require the check and turn auto-merge on.
+EOF
+fi
