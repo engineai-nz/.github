@@ -111,6 +111,11 @@ jobs:
           node-version: ${{ steps.detect.outputs.node-version }}
           # `cache: npm` hashes the lockfile and errors when there isn't one.
           cache: ${{ steps.detect.outputs.lock == 'true' && 'npm' || '' }}
+          # setup-node looks for the lockfile at the repo root by default, which
+          # breaks callers with working-directory set (lockfile in a subdir).
+          # For the default "." this resolves to ./package-lock.json - identical
+          # to the old behaviour.
+          cache-dependency-path: ${{ inputs.working-directory }}/package-lock.json
 
       - name: Install dependencies
         if: steps.detect.outputs.node == 'true'
