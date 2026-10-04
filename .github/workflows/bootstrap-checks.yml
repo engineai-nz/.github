@@ -1,0 +1,16 @@
+name: Bootstrap source checks
+on:
+  push:
+    branches: [main]
+    paths: ['scripts/new-project.sh', 'tests/test_new_project.py', '.github/workflows/bootstrap-checks.yml']
+  pull_request:
+    paths: ['scripts/new-project.sh', 'tests/test_new_project.py', '.github/workflows/bootstrap-checks.yml']
+permissions:
+  contents: read
+jobs:
+  bootstrap-checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: bash -n scripts/new-project.sh
+      - run: python3 -B -m unittest discover -s tests -v

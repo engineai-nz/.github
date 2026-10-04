@@ -26,6 +26,7 @@ TEMPLATE="$ORG/engine-ai-starter"
 # bare job name. Requiring the bare name leaves every PR BLOCKED forever on a green
 # build. The caller's job id must therefore be `ci`, matching the template's ci.yml.
 CI_CONTEXT="ci / Install, lint, test, typecheck"
+PACKAGE_CONTEXT="Project package exists"
 
 SLUG=""; CLIENT=""; CREATE=false; WANT_CI=true; DRY=false
 
@@ -48,6 +49,9 @@ REPO="$ORG/$SLUG"
 run() { if $DRY; then echo "DRY: $*"; else "$@"; fi; }
 say() { printf '\n\033[1m==> %s\033[0m\n' "$*"; }
 
+if ! $DRY; then
+  command -v jq >/dev/null || { echo "jq CLI not found" >&2; exit 1; }
+fi
 command -v gh >/dev/null || { echo "gh CLI not found" >&2; exit 1; }
 gh auth status >/dev/null 2>&1 || { echo "gh not authenticated" >&2; exit 1; }
 
@@ -58,32 +62,42 @@ if $CREATE; then
   else
     say "creating $REPO from $TEMPLATE"
     run gh repo create "$REPO" --template "$TEMPLATE" --private
-    sleep 5
+    if ! $DRY; then sleep 5; fi
   fi
 else
   gh repo view "$REPO" >/dev/null 2>&1 || { echo "repo $REPO not found (pass --create)" >&2; exit 1; }
 fi
 
+# A failure after setup starts must leave the setting off, including uncertain writes.
+fail_closed() {
+  local status=$?
+  if [[ "$status" -ne 0 ]] && ! $DRY; then
+    if ! gh api -X PATCH "repos/$REPO" -F allow_auto_merge=false >/dev/null ||
+       ! gh api "repos/$REPO" | jq -e '.allow_auto_merge == false' >/dev/null; then
+      echo "FAILED to verify auto-merge OFF after error; provider readback required before further action." >&2
+    fi
+  fi
+  exit "$status"
+}
+trap fail_closed EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
 # ---------------------------------------------------------------- settings
-# Auto-merge is only safe when something holds it. With no required check,
-# `gh pr merge --auto` merges instantly — approvals are 0 by design, so the
-# pull_request rule alone gates nothing. Under --no-ci we therefore fail closed:
-# allow_auto_merge=false makes `--auto` error rather than silently ship.
-say "repo settings: auto-merge=$WANT_CI, delete branch on merge, squash+rebase only"
+say "repo settings: auto-merge OFF until verified, delete branch on merge, squash+rebase only"
 run gh api -X PATCH "repos/$REPO" \
-  -F allow_auto_merge=$($WANT_CI && echo true || echo false) \
+  -F allow_auto_merge=false \
   -F delete_branch_on_merge=true \
   -F allow_merge_commit=false \
   -F allow_squash_merge=true \
   -F allow_rebase_merge=true >/dev/null
+if ! $DRY; then
+  gh api "repos/$REPO" | jq -e '.allow_auto_merge == false' >/dev/null
+fi
 
 # ---------------------------------------------------------------- properties
-# ci=true is what opts this repo into the org ruleset "CI required (standard
-# starter context)" — since 2026-07-10 the org rule is the ONLY source of the
-# required check; this script no longer writes a per-repo copy. That makes this
-# write LOAD-BEARING under CI: if it fails, the repo has auto-merge on and no
-# required check (the blind-merge footgun), so we flip auto-merge back off and
-# abort rather than leave that state behind.
+# ci=true opts into the organisation's required-check rules. It is not proof
+# of effective coverage or successful current-head CI.
 say "custom properties: ci=$WANT_CI client=${CLIENT:-none}"
 props="[{\"property_name\":\"ci\",\"value\":\"$($WANT_CI && echo true || echo false)\"}]"
 if [[ -n "$CLIENT" ]]; then
@@ -93,15 +107,9 @@ if $DRY; then
   echo "DRY: set custom properties -> $props"
 elif echo "{\"properties\":$props}" | gh api -X PATCH "repos/$REPO/properties/values" --input - >/dev/null 2>&1; then
   echo "  ✓ properties set"
-elif $WANT_CI; then
-  echo "  ✗ FAILED to set ci=true — the org ruleset will NOT cover this repo." >&2
-  echo "    Disabling auto-merge so the repo fails closed instead of merging blind." >&2
-  gh api -X PATCH "repos/$REPO" -F allow_auto_merge=false >/dev/null
-  echo "    Check the 'ci' schema exists at github.com/organizations/$ORG/settings/custom-properties" >&2
-  echo "    and that your token can write repo properties, then re-run." >&2
-  exit 1
 else
-  echo "  ⚠ 'client' property not set (non-fatal; ci=false needs no org coverage)."
+  echo "FAILED to set custom properties; auto-merge stays off." >&2
+  exit 1
 fi
 
 # ---------------------------------------------------------------- ruleset
@@ -130,7 +138,7 @@ BODY=$(cat <<JSON
 JSON
 )
 
-existing=$(gh api "repos/$REPO/rulesets" -q '.[]|select(.name=="Protect main").id' 2>/dev/null | head -1 || true)
+existing=$(gh api "repos/$REPO/rulesets" -q '[.[]|select(.name=="Protect main")][0].id // empty')
 if $DRY; then
   if [[ -n "$existing" ]]; then echo "DRY: update ruleset $existing"; else echo "DRY: create ruleset"; fi
 elif [[ -n "$existing" ]]; then
@@ -157,56 +165,62 @@ labels=(
 for l in "${labels[@]}"; do
   IFS='|' read -r name colour desc <<< "$l"
   if $DRY; then echo "DRY: label $name"; else
-    gh label create "$name" -R "$REPO" --color "$colour" --description "$desc" --force >/dev/null 2>&1 || true
+    gh label create "$name" -R "$REPO" --color "$colour" --description "$desc" --force >/dev/null
   fi
 done
 echo "  ${#labels[@]} labels applied"
 
 # ---------------------------------------------------------------- verify
 if $WANT_CI && ! $DRY; then
-  DB=$(gh api "repos/$REPO" -q .default_branch)
+  say "verifying strict effective main protection and current-head CI"
+  settings=$(gh api "repos/$REPO")
+  jq -e '.default_branch == "main" and .allow_auto_merge == false' <<< "$settings" >/dev/null
+  rules=$(gh api "repos/$REPO/rules/branches/main")
+  jq -e --arg package "$PACKAGE_CONTEXT" --arg ci "$CI_CONTEXT" '
+    type == "array" and
+    any(.[]; .type == "pull_request") and
+    any(.[]; .type == "required_status_checks" and
+      .parameters.strict_required_status_checks_policy == true and
+      (.parameters.required_status_checks | type == "array" and
+        any(.[]; .context == $package) and any(.[]; .context == $ci)))
+  ' <<< "$rules" >/dev/null
 
-  # 1. The org ruleset must actually reach this branch. ci=true is set above,
-  #    but property-targeted rulesets are the only source of the check now —
-  #    if it hasn't landed, auto-merge is live with nothing holding it.
-  say "verifying the org rule covers $DB"
-  org_ck=$(gh api "repos/$REPO/rules/branches/$DB" \
-             -q '[.[]|select(.type=="required_status_checks" and .ruleset_source_type=="Organization")]|length' 2>/dev/null || echo 0)
-  if [[ "${org_ck:-0}" -ge 1 ]]; then
-    echo "  ✓ org-sourced required check active on $DB"
-  else
-    echo "  ✗ org ruleset has NOT picked this repo up — auto-merge would be blind." >&2
-    echo "    Disabling auto-merge to fail closed. Confirm ci=true stuck" >&2
-    echo "    (gh api repos/$REPO/properties/values) and re-run." >&2
-    gh api -X PATCH "repos/$REPO" -F allow_auto_merge=false >/dev/null
-    exit 1
-  fi
+  commit=$(gh api "repos/$REPO/commits/main")
+  sha=$(jq -er '.sha | select(type == "string" and test("^[a-fA-F0-9]{40}$"))' <<< "$commit")
+  runs=$(gh api "repos/$REPO/commits/$sha/check-runs?per_page=100")
+  jq -e --arg sha "$sha" --arg package "$PACKAGE_CONTEXT" --arg ci "$CI_CONTEXT" '
+    . as $response |
+    (.check_runs | type == "array") and
+    (.total_count | type == "number" and . >= 0 and floor == .) and
+    .total_count == (.check_runs | length) and
+    all([$package, $ci][]; . as $context |
+      [$response.check_runs[] | select(.name == $context)] |
+      length == 1 and .[0].head_sha == $sha and
+      .[0].status == "completed" and .[0].conclusion == "success")
+  ' <<< "$runs" >/dev/null
 
-  # 2. A required context that never reports blocks every PR permanently. Check
-  #    that the org-required name is one this repo's CI actually emits.
-  say "verifying required check '$CI_CONTEXT' is a real context"
-  seen=$(gh api "repos/$REPO/commits/$DB/check-runs" -q '.check_runs[].name' 2>/dev/null || true)
-  if [[ -z "$seen" ]]; then
-    echo "  ⚠ no check runs on the default branch yet — cannot verify."
-    echo "    Open a PR and confirm it reaches CLEAN before trusting this setup."
-  elif grep -Fxq "$CI_CONTEXT" <<< "$seen"; then
-    echo "  ✓ '$CI_CONTEXT' reported by a real run"
-  else
-    echo "  ✗ MISMATCH — org rule requires '$CI_CONTEXT' but the repo emits:"
-    sed 's/^/      /' <<< "$seen"
-    echo "    Every PR will sit BLOCKED. Fix the caller job id in ci.yml (must be 'ci'),"
-    echo "    or set ci=false until it is, then re-run."
-    exit 1
-  fi
+  verified_commit=$(gh api "repos/$REPO/commits/main")
+  jq -e --arg sha "$sha" '.sha == $sha' <<< "$verified_commit" >/dev/null
+  settings=$(gh api "repos/$REPO")
+  jq -e '.default_branch == "main" and .allow_auto_merge == false' <<< "$settings" >/dev/null
+  run gh api -X PATCH "repos/$REPO" -F allow_auto_merge=true >/dev/null
+  settings=$(gh api "repos/$REPO")
+  jq -e '.default_branch == "main" and .allow_auto_merge == true' <<< "$settings" >/dev/null
+  verified_commit=$(gh api "repos/$REPO/commits/main")
+  jq -e --arg sha "$sha" '.sha == $sha' <<< "$verified_commit" >/dev/null
+  echo "  verified main $sha; auto-merge enabled. Independent PR review remains separate."
 fi
 
 # ---------------------------------------------------------------- report
-say "done — $REPO"
 if ! $DRY; then
   gh api "repos/$REPO" -q '"  auto_merge=\(.allow_auto_merge)  delete_branch=\(.delete_branch_on_merge)"'
   gh api "repos/$REPO/rules/branches/$(gh api "repos/$REPO" -q .default_branch)" \
-    -q '"  rules: " + ([.[].type]|unique|join(", "))' 2>/dev/null || true
+    -q '"  rules: " + ([.[].type]|unique|join(", "))'
 fi
+if ! $WANT_CI && ! $DRY; then
+  gh api "repos/$REPO" | jq -e ' .allow_auto_merge == false' >/dev/null
+fi
+say "done — $REPO"
 cat <<EOF
 
   Not automated (deliberate):
@@ -220,7 +234,8 @@ if ! $WANT_CI; then
 
   Bootstrapped with --no-ci: auto-merge is OFF, so \`gh pr merge --auto\` errors
   instead of merging an unchecked PR. Add a caller ci.yml emitting
-  "$CI_CONTEXT", then re-run this script without --no-ci to
-  require the check and turn auto-merge on.
+  "$PACKAGE_CONTEXT" and "$CI_CONTEXT", then re-run without --no-ci.
+  Successful current-main checks and strict effective PR/check protection must
+  verify before auto-merge is enabled.
 EOF
 fi
