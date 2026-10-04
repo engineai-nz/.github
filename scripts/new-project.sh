@@ -68,12 +68,16 @@ else
   gh repo view "$REPO" >/dev/null 2>&1 || { echo "repo $REPO not found (pass --create)" >&2; exit 1; }
 fi
 
-# A failure after setup starts must leave the setting off, including uncertain writes.
+# Failures attempt OFF and independently read back uncertain writes.
 fail_closed() {
   local status=$?
   if [[ "$status" -ne 0 ]] && ! $DRY; then
-    if ! gh api -X PATCH "repos/$REPO" -F allow_auto_merge=false >/dev/null ||
-       ! gh api "repos/$REPO" | jq -e '.allow_auto_merge == false' >/dev/null; then
+    if ! gh api -X PATCH "repos/$REPO" -F allow_auto_merge=false >/dev/null; then
+      echo "Disable write failed; independently reading back auto-merge state." >&2
+    fi
+    if gh api "repos/$REPO" | jq -e '.allow_auto_merge == false' >/dev/null; then
+      echo "auto-merge OFF verified after error." >&2
+    else
       echo "FAILED to verify auto-merge OFF after error; provider readback required before further action." >&2
     fi
   fi
@@ -170,40 +174,63 @@ for l in "${labels[@]}"; do
 done
 echo "  ${#labels[@]} labels applied"
 
+required_check_sources() {
+  local effective_rules
+  effective_rules=$(gh api "repos/$REPO/rules/branches/main") || return 1
+  jq -e --arg package "$PACKAGE_CONTEXT" --arg ci "$CI_CONTEXT" '
+    if type == "array" and any(.[]; .type == "pull_request") and
+      all(.[] | select(.type == "required_status_checks"); .parameters.required_status_checks | type == "array") then
+      [.[] | select(.type == "required_status_checks") | .parameters as $parameters |
+        $parameters.required_status_checks[]? |
+        {context, integration_id, strict: $parameters.strict_required_status_checks_policy}] as $checks |
+      [$package, $ci] | map(. as $context |
+        [$checks[] | select(.context == $context)] as $matching |
+        if ($matching | length) > 0 and any($matching[]; .strict == true) and
+          all($matching[]; .integration_id | type == "number" and . > 0 and floor == .) and
+          ($matching | map(.integration_id) | unique | length) == 1 then
+          {context: $context, integration_id: $matching[0].integration_id}
+        else error("required context lacks strict, unambiguous source binding") end)
+    else error("effective pull-request protection unavailable") end
+  ' <<< "$effective_rules"
+}
+
 # ---------------------------------------------------------------- verify
 if $WANT_CI && ! $DRY; then
   say "verifying strict effective main protection and current-head CI"
   settings=$(gh api "repos/$REPO")
   jq -e '.default_branch == "main" and .allow_auto_merge == false' <<< "$settings" >/dev/null
-  rules=$(gh api "repos/$REPO/rules/branches/main")
-  jq -e --arg package "$PACKAGE_CONTEXT" --arg ci "$CI_CONTEXT" '
-    type == "array" and
-    any(.[]; .type == "pull_request") and
-    any(.[]; .type == "required_status_checks" and
-      .parameters.strict_required_status_checks_policy == true and
-      (.parameters.required_status_checks | type == "array" and
-        any(.[]; .context == $package) and any(.[]; .context == $ci)))
-  ' <<< "$rules" >/dev/null
+  sources=$(required_check_sources)
 
   commit=$(gh api "repos/$REPO/commits/main")
   sha=$(jq -er '.sha | select(type == "string" and test("^[a-fA-F0-9]{40}$"))' <<< "$commit")
   runs=$(gh api "repos/$REPO/commits/$sha/check-runs?per_page=100")
-  jq -e --arg sha "$sha" --arg package "$PACKAGE_CONTEXT" --arg ci "$CI_CONTEXT" '
+  jq -e --arg sha "$sha" --argjson sources "$sources" '
     . as $response |
     (.check_runs | type == "array") and
     (.total_count | type == "number" and . >= 0 and floor == .) and
     .total_count == (.check_runs | length) and
-    all([$package, $ci][]; . as $context |
-      [$response.check_runs[] | select(.name == $context)] |
+    all($sources[]; . as $binding |
+      [$response.check_runs[] | select(.name == $binding.context)] |
       length == 1 and .[0].head_sha == $sha and
-      .[0].status == "completed" and .[0].conclusion == "success")
+      .[0].status == "completed" and .[0].conclusion == "success" and
+      .[0].app.id == $binding.integration_id and .[0].app.slug == "github-actions")
   ' <<< "$runs" >/dev/null
 
   verified_commit=$(gh api "repos/$REPO/commits/main")
   jq -e --arg sha "$sha" '.sha == $sha' <<< "$verified_commit" >/dev/null
   settings=$(gh api "repos/$REPO")
   jq -e '.default_branch == "main" and .allow_auto_merge == false' <<< "$settings" >/dev/null
+  verified_sources=$(required_check_sources)
+  if [[ "$verified_sources" != "$sources" ]]; then
+    echo "Required-check source binding changed during verification." >&2
+    exit 1
+  fi
   run gh api -X PATCH "repos/$REPO" -F allow_auto_merge=true >/dev/null
+  verified_sources=$(required_check_sources)
+  if [[ "$verified_sources" != "$sources" ]]; then
+    echo "Required-check source binding changed during verification." >&2
+    exit 1
+  fi
   settings=$(gh api "repos/$REPO")
   jq -e '.default_branch == "main" and .allow_auto_merge == true' <<< "$settings" >/dev/null
   verified_commit=$(gh api "repos/$REPO/commits/main")
