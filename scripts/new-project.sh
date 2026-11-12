@@ -131,13 +131,37 @@ RULES='[
 # context that never posts would block every PR.
 GATE_ON=false
 if $WANT_CI; then
-  if $DRY && ! gh repo view "$REPO" >/dev/null 2>&1; then
-    GATE_ON=true
-  elif gh api "repos/$REPO/contents/.github/workflows/merge-gate.yml" >/dev/null 2>&1; then
+  if $DRY; then
     GATE_ON=true
   else
-    echo "  ⚠ .github/workflows/merge-gate.yml not on the default branch; merge-gate NOT required." >&2
-    echo "    Land it from $TEMPLATE through a PR, then re-run to require it." >&2
+    # The template copy can lag repo creation, so retry before deciding. Only a
+    # real 404 counts as "missing"; any other error aborts before the ruleset PUT,
+    # so a transient failure can never strip an existing merge-gate rule.
+    gate_state=error
+    for attempt in 1 2 3 4 5 6; do
+      if out=$(gh api "repos/$REPO/contents/.github/workflows/merge-gate.yml" --jq .sha 2>&1); then
+        gate_state=present; break
+      elif grep -q 'HTTP 404' <<< "$out"; then
+        gate_state=missing
+        $CREATE || break
+      else
+        gate_state=error
+      fi
+      sleep 5
+    done
+    case "$gate_state" in
+      present) GATE_ON=true ;;
+      missing)
+        echo "  ✗ .github/workflows/merge-gate.yml is not on the default branch, so merge-gate" >&2
+        echo "    cannot be required. Turning auto-merge OFF so --auto cannot skip review." >&2
+        echo "    Land the workflow from $TEMPLATE through a PR, then re-run." >&2
+        gh api -X PATCH "repos/$REPO" -F allow_auto_merge=false >/dev/null ;;
+      *)
+        echo "  ✗ could not read merge-gate.yml ($out). Turning auto-merge OFF and" >&2
+        echo "    stopping before the ruleset update; re-run once GitHub answers." >&2
+        gh api -X PATCH "repos/$REPO" -F allow_auto_merge=false >/dev/null
+        exit 1 ;;
+    esac
   fi
 fi
 if $GATE_ON; then
