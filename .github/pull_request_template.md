@@ -20,6 +20,8 @@ Keep one line per issue, and pick per issue:
 - `Part of ENG-<id>` for a parent, an epic, or a slice this merge leaves unfinished. Never put a closing keyword on a parent.
 - `skip ENG-<id>` to mention an issue without linking it.
 Leftover work: split it into a new slice issue before merging. Never merge under a closing link and reopen the issue afterwards.
+After merge: record deploy and verification readback as a comment on the closed slice or the PR. If post-merge work or a rollback is needed, open a new follow-up issue. Never reopen the closed issue.
+Closed without merging: move the Linear issue out of `In Progress` or `In Review` in the same session, to `Todo` or to `Canceled` with a note.
 -->
 Closes ENG-
 Part of ENG-
